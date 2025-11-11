@@ -3,7 +3,7 @@
 ## AIM
 To develop an LSTM-based model for recognizing the named entities in the text.
 
-## THEORY
+
 
 
 ## Neural Network Model
@@ -12,25 +12,28 @@ Include the neural network model diagram.
 ## DESIGN STEPS
 ### STEP 1: 
 
-Write your own steps
+Load data, create word/tag mappings, and group sentences.
 
 ### STEP 2: 
 
-
+Convert sentences to index sequences, pad to fixed length, and split into training/testing sets.
 
 ### STEP 3: 
 
-
+Define dataset and DataLoader for batching.
 
 ### STEP 4: 
 
-
+Build a bidirectional LSTM model for sequence tagging.
 
 ### STEP 5: 
 
-
+Train the model over multiple epochs, tracking loss.
 
 ### STEP 6: 
+
+
+Evaluate model accuracy, plot loss curves, and visualize predictions on a sample.
 
 
 
@@ -38,38 +41,193 @@ Write your own steps
 
 ## PROGRAM
 
-### Name:
+### Name: JAYAPRADAN M
 
-### Register Number:
+### Register Number: 212224240061
 
 ```python
+
+i#  All Imports
+import pandas as pd
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from torch.nn.utils.rnn import pad_sequence
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+#  Device configuration
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+#  Load and prepare data
+data = pd.read_csv("ner_dataset.csv", encoding="latin1").ffill()
+words = list(data["Word"].unique())
+tags = list(data["Tag"].unique())
+
+if "ENDPAD" not in words:
+    words.append("ENDPAD")
+
+word2idx = {w: i + 1 for i, w in enumerate(words)}
+tag2idx = {t: i for i, t in enumerate(tags)}
+idx2tag = {i: t for t, i in tag2idx.items()}
+
+#  Group words by sentences
+class SentenceGetter:
+    def __init__(self, data):
+        self.grouped = data.groupby("Sentence #", group_keys=False).apply(
+            lambda s: [(w, t) for w, t in zip(s["Word"], s["Tag"])]
+        )
+        self.sentences = list(self.grouped)
+
+getter = SentenceGetter(data)
+sentences = getter.sentences
+
+#  Encode sentences
+X = [[word2idx[w] for w, t in s] for s in sentences]
+y = [[tag2idx[t] for w, t in s] for s in sentences]
+
+#  Padding sequences
+max_len = 50
+X_pad = pad_sequence([torch.tensor(seq) for seq in X], batch_first=True, padding_value=word2idx["ENDPAD"])
+y_pad = pad_sequence([torch.tensor(seq) for seq in y], batch_first=True, padding_value=tag2idx["O"])
+X_pad = X_pad[:, :max_len]
+y_pad = y_pad[:, :max_len]
+
+#  Split data
+X_train, X_test, y_train, y_test = train_test_split(X_pad, y_pad, test_size=0.2, random_state=1)
+
+#  Dataset class
+class NERDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return {
+            "input_ids": self.X[idx],
+            "labels": self.y[idx]
+        }
+
+train_loader = DataLoader(NERDataset(X_train, y_train), batch_size=32, shuffle=True)
+test_loader = DataLoader(NERDataset(X_test, y_test), batch_size=32)
+
+#  BiLSTM Model definition
 class BiLSTMTagger(nn.Module):
-    # Include your code here
-
-
-
-
-
-
+    def __init__(self, vocab_size, tagset_size, embedding_dim=128, hidden_dim=256):
+        super(BiLSTMTagger, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=word2idx["ENDPAD"])
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2, num_layers=1,
+                            bidirectional=True, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, tagset_size)
 
     def forward(self, input_ids):
-        # Include your code here
-        
+        emb = self.embedding(input_ids)                      # Shape: (batch_size, seq_len, embedding_dim)
+        lstm_out, _ = self.lstm(emb)                         # Shape: (batch_size, seq_len, hidden_dim)
+        logits = self.fc(lstm_out)                           # Shape: (batch_size, seq_len, tagset_size)
+        return logits
 
+#  Initialize model, loss, and optimizer
+model = BiLSTMTagger(vocab_size=len(word2idx) + 1, tagset_size=len(tag2idx)).to(device)
+loss_fn = nn.CrossEntropyLoss(ignore_index=tag2idx["O"])
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-model = 
-loss_fn = 
-optimizer = 
-
-
-# Training and Evaluation Functions
+#  Training & Evaluation
 def train_model(model, train_loader, test_loader, loss_fn, optimizer, epochs=3):
-    # Include the training and evaluation functions
+    train_losses, val_losses = [], []
 
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
 
+        for batch in train_loader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+
+            outputs = model(input_ids)
+
+            loss = loss_fn(outputs.view(-1, outputs.shape[-1]), labels.view(-1))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_train_loss = total_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
+
+        # Evaluation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch in test_loader:
+                input_ids = batch["input_ids"].to(device)
+                labels = batch["labels"].to(device)
+                outputs = model(input_ids)
+                loss = loss_fn(outputs.view(-1, outputs.shape[-1]), labels.view(-1))
+                val_loss += loss.item()
+
+        avg_val_loss = val_loss / len(test_loader)
+        val_losses.append(avg_val_loss)
+
+        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
     return train_losses, val_losses
 
+def evaluate_model(model, test_loader, X_test, y_test):
+    model.eval()
+    true_tags, pred_tags = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+            outputs = model(input_ids)
+            preds = torch.argmax(outputs, dim=-1)
+            for i in range(len(labels)):
+                for j in range(len(labels[i])):
+                    if labels[i][j] != tag2idx["O"]:
+                        true_tags.append(idx2tag[labels[i][j].item()])
+                        pred_tags.append(idx2tag[preds[i][j].item()])
+    print(classification_report(true_tags, pred_tags, digits=4))
+
+#  Train & Evaluate
+train_losses, val_losses = train_model(model, train_loader, test_loader, loss_fn, optimizer, epochs=3)
+evaluate_model(model, test_loader, X_test, y_test)
+
+# Plot loss curve
+print('Name:  JAYAPRADAN M               ')
+print('Register Number:  212224240061    ')
+history_df = pd.DataFrame({"loss": train_losses, "val_loss": val_losses})
+history_df.plot(title="Loss Over Epochs")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.grid(True)
+plt.show()
+
+#  Inference and prediction on sample
+i = 125
+model.eval()
+sample = X_test[i].unsqueeze(0).to(device)
+output = model(sample)
+preds = torch.argmax(output, dim=-1).squeeze().cpu().numpy()
+true = y_test[i].numpy()
+
+print('Name: JAYAPRADAN M                ')
+print('Register Number:  212224240061   ')
+print("{:<15} {:<10} {}\n{}".format("Word", "True", "Pred", "-" * 40))
+for w_id, true_tag, pred_tag in zip(X_test[i], y_test[i], preds):
+    if w_id.item() != word2idx["ENDPAD"]:
+        word = words[w_id.item() - 1]
+        true_label = tags[true_tag.item()]
+        pred_label = tags[pred_tag]
+        print(f"{word:<15} {true_label:<10} {pred_label}")
 
 ```
 
@@ -77,10 +235,12 @@ def train_model(model, train_loader, test_loader, loss_fn, optimizer, epochs=3):
 
 ## Loss Vs Epoch Plot
 
-Include your plot here
+<img width="657" height="520" alt="image" src="https://github.com/user-attachments/assets/19fff181-889b-465a-b31b-5548293bb258" />
+
 
 ### Sample Text Prediction
-Include your sample text prediction here
+<img width="378" height="452" alt="image" src="https://github.com/user-attachments/assets/130d56fd-4707-4a30-b68f-ebb5dcd19e90" />
 
 ## RESULT
-Include your result here
+
+Thus, an LSTM-based model for recognizing the named entities in the text has been developed successfully.
